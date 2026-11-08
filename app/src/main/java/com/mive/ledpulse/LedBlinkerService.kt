@@ -22,6 +22,10 @@ import androidx.core.content.ContextCompat
  * LedBlinkerService - Dedicated to Mive Style Folder 1 (AT-M120) Lid Smart LED.
  * Uses Android Notification Lights (FLAG_SHOW_LIGHTS) with monotonically increasing IDs
  * to trigger the exterior chassis LED repeatedly without using the camera flash.
+ * 
+ * Configured with SILENT CHANNELS & VISIBILITY_SECRET:
+ * - 100% hidden from the screen (No annoying floating popups or banners!).
+ * - Physical lid LED pulses smoothly every 2.0s when lid is closed.
  */
 class LedBlinkerService : Service() {
 
@@ -32,7 +36,7 @@ class LedBlinkerService : Service() {
         const val ACTION_TEST_BLINK = "com.mive.ledpulse.ACTION_TEST_BLINK"
 
         private const val CHANNEL_FOREGROUND_ID = "mive_bg_service_v6"
-        private const val CHANNEL_LID_LED_ID = "mive_lid_led_channel_v6"
+        private const val CHANNEL_LID_LED_ID = "mive_lid_led_silent_v8"
 
         fun triggerTestBlink(context: Context, durationMs: Long) {
             val intent = Intent(context, LedBlinkerService::class.java).apply {
@@ -50,7 +54,7 @@ class LedBlinkerService : Service() {
     private lateinit var notificationManager: NotificationManager
     private var pulseCounter = 3000
 
-    // Khi người dùng lật mở nắp điện thoại -> màn hình BẬT -> dừng nháy ngay lập tức!
+    // Khi người dùng lật mở nắp điện thoại -> màn hình BẬT -> dừng nháy & xóa sạch thông báo chớp đèn ngay!
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == Intent.ACTION_SCREEN_ON) {
@@ -64,7 +68,7 @@ class LedBlinkerService : Service() {
         override fun run() {
             if (!isBlinking) return
 
-            // Kích hoạt nháy đèn nắp máy
+            // Kích hoạt nháy đèn nắp máy trong nền
             triggerLidLedPulse()
 
             // Lặp lại sau mỗi 2.0 giây
@@ -119,7 +123,7 @@ class LedBlinkerService : Service() {
         Log.d(TAG, "Starting persistent lid LED loop.")
 
         try {
-            wakeLock?.acquire(2 * 60 * 60 * 1000L)
+            wakeLock?.acquire(2 * 60 * 60 * 1000L) // Giữ CPU thức để chớp đều
         } catch (e: Exception) {
             Log.e(TAG, "WakeLock error: ${e.message}")
         }
@@ -133,6 +137,7 @@ class LedBlinkerService : Service() {
         Log.d(TAG, "Halting lid LED loop.")
 
         handler.removeCallbacks(pulseRunnable)
+        // Xóa sạch các thông báo chớp đèn cũ
         for (i in (pulseCounter - 10)..pulseCounter) {
             notificationManager.cancel(i)
         }
@@ -144,6 +149,12 @@ class LedBlinkerService : Service() {
         }
     }
 
+    /**
+     * Gửi xung tín hiệu đèn LED ngầm:
+     * - Dùng IMPORTANCE_DEFAULT + VISIBILITY_SECRET: Không hiện popup nổi trên màn hình.
+     * - Bỏ trống text để không hiển thị chữ rác.
+     * - Kích hoạt đèn LED nắp máy chớp mượt mà không làm phiền người dùng.
+     */
     private fun triggerLidLedPulse() {
         try {
             wakeLock?.acquire(3500L)
@@ -151,15 +162,16 @@ class LedBlinkerService : Service() {
             val pulseId = ++pulseCounter
             val previousId = pulseId - 1
 
+            // Hủy ID trước đó để không bị dồn thông báo
             notificationManager.cancel(previousId)
 
             val pulseNotif = NotificationCompat.Builder(this, CHANNEL_LID_LED_ID)
                 .setSmallIcon(R.drawable.ic_led_pulse)
-                .setContentTitle("Thông báo mới")
-                .setContentText("Đang nháy đèn nắp máy (#$pulseId)")
-                .setPriority(NotificationCompat.PRIORITY_MAX)
-                .setCategory(NotificationCompat.CATEGORY_MESSAGE)
-                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .setContentTitle("")
+                .setContentText("")
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .setCategory(NotificationCompat.CATEGORY_SERVICE)
+                .setVisibility(NotificationCompat.VISIBILITY_SECRET)
                 .setOnlyAlertOnce(false)
                 .setLights(0xFF00FF00.toInt(), 500, 500)
                 .setWhen(System.currentTimeMillis())
@@ -177,6 +189,12 @@ class LedBlinkerService : Service() {
 
     private fun createNotificationChannels() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            // Xóa kênh cũ từng gây hiện banner nổi
+            try {
+                notificationManager.deleteNotificationChannel("mive_lid_led_channel_v5")
+                notificationManager.deleteNotificationChannel("mive_lid_led_channel_v6")
+            } catch (e: Exception) {}
+
             val fgChannel = NotificationChannel(
                 CHANNEL_FOREGROUND_ID,
                 "Mive LED Pulse Background",
@@ -186,10 +204,11 @@ class LedBlinkerService : Service() {
             }
             notificationManager.createNotificationChannel(fgChannel)
 
+            // Kênh tàng hình: IMPORTANCE_DEFAULT bật đèn nắp máy nhưng KHÔNG bật banner nổi
             val pulseChannel = NotificationChannel(
                 CHANNEL_LID_LED_ID,
-                "Mive Lid LED Channel",
-                NotificationManager.IMPORTANCE_HIGH
+                "Mive Lid LED Silent Pulse",
+                NotificationManager.IMPORTANCE_DEFAULT
             ).apply {
                 enableLights(true)
                 lightColor = 0xFF00FF00.toInt()
@@ -197,6 +216,7 @@ class LedBlinkerService : Service() {
                 vibrationPattern = longArrayOf(0)
                 setSound(null, null)
                 setShowBadge(false)
+                lockscreenVisibility = Notification.VISIBILITY_SECRET
             }
             notificationManager.createNotificationChannel(pulseChannel)
         }
