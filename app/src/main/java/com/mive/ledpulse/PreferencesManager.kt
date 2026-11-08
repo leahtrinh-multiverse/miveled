@@ -14,19 +14,12 @@ class PreferencesManager(context: Context) {
         get() = prefs.getInt("KEY_INTERVAL", 2)
         set(value) = prefs.edit().putInt("KEY_INTERVAL", value).apply()
 
+    /**
+     * Theo dõi TOÀN BỘ thông báo trên máy:
+     * Bất kỳ app nào (Zalo, Messenger, SMS, Cuộc gọi, Shopee, Telegram, Gmail, Banking...)
+     * khi có thông báo đến đều được nháy đèn LED liên tục!
+     */
     fun isAppWhitelisted(packageName: String): Boolean {
-        val whitelistedApps = prefs.getStringSet("KEY_WHITELIST", setOf(
-            "com.kakao.talk",
-            "com.samsung.android.messaging",
-            "com.google.android.apps.messaging",
-            "com.android.mms",
-            "com.whatsapp",
-            "com.android.server.telecom",
-            "com.google.android.dialer",
-            "org.telegram.messenger",
-            "jp.naver.line.android"
-        )) ?: emptySet()
-
-        return whitelistedApps.contains(packageName)
+        return true
     }
 }
