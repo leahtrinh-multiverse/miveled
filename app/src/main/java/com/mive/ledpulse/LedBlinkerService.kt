@@ -14,12 +14,8 @@ import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 
-/**
- * LedBlinkerService - Chuyên biệt cho đèn LED nắp gập của Mive Style Folder 1 (AT-M120).
- * Đã loại bỏ hoàn toàn đèn Flash camera.
- * Sử dụng cơ chế đảo ID thông báo (3001 <-> 3002) mỗi 2.5s để kích hoạt chip MediaTek chớp đèn nắp.
- */
 class LedBlinkerService : Service() {
 
     companion object {
@@ -28,8 +24,16 @@ class LedBlinkerService : Service() {
         const val ACTION_STOP_BLINKING = "com.mive.ledpulse.ACTION_STOP_BLINKING"
         const val ACTION_TEST_BLINK = "com.mive.ledpulse.ACTION_TEST_BLINK"
 
-        private const val CHANNEL_FOREGROUND_ID = "mive_bg_service_v5"
-        private const val CHANNEL_LID_LED_ID = "mive_lid_led_channel_v5"
+        private const val CHANNEL_FOREGROUND_ID = "mive_bg_service_v6"
+        private const val CHANNEL_LID_LED_ID = "mive_lid_led_channel_v6"
+
+        fun triggerTestBlink(context: Context, durationMs: Long) {
+            val intent = Intent(context, LedBlinkerService::class.java).apply {
+                action = ACTION_TEST_BLINK
+                putExtra("TEST_DURATION", durationMs)
+            }
+            ContextCompat.startForegroundService(context, intent)
+        }
     }
 
     private val TAG = "LedBlinkerService"
@@ -43,7 +47,7 @@ class LedBlinkerService : Service() {
         override fun run() {
             if (!isBlinking) return
 
-            // Kích hoạt đèn LED trên nắp máy
+            // Phát xung đèn LED nắp
             triggerLidLedPulse()
 
             // Lặp lại mỗi 2.5 giây
@@ -87,10 +91,10 @@ class LedBlinkerService : Service() {
     private fun startBlinking() {
         if (isBlinking) return
         isBlinking = true
-        Log.d(TAG, "Bắt đầu chu kỳ nháy đèn LED nắp gập.")
+        Log.d(TAG, "Bắt đầu nháy đèn LED nắp.")
 
         try {
-            wakeLock?.acquire(2 * 60 * 60 * 1000L) // Giữ CPU tỉnh để điều khiển đèn
+            wakeLock?.acquire(2 * 60 * 60 * 1000L)
         } catch (e: Exception) {
             Log.e(TAG, "WakeLock error: ${e.message}")
         }
@@ -114,18 +118,13 @@ class LedBlinkerService : Service() {
         }
     }
 
-    /**
-     * Kỹ thuật đảo ID thông báo (3001 <-> 3002) mỗi 2.5s.
-     * Huỷ ID cũ và bắn ID mới kèm cờ FLAG_SHOW_LIGHTS để chip MediaTek nhận diện là
-     * thông báo mới và kích hoạt chiếc đèn LED trên vỏ nắp máy Mive chớp sáng!
-     */
     private fun triggerLidLedPulse() {
         try {
             val pulseId = if (pulseToggle) 3001 else 3002
             val oldId = if (pulseToggle) 3002 else 3001
             pulseToggle = !pulseToggle
 
-            // Huỷ thông báo cũ để reset trạng thái đèn
+            // Huỷ ID cũ để hệ điều hành reset trạng thái đèn
             notificationManager.cancel(oldId)
 
             val pulseNotif = NotificationCompat.Builder(this, CHANNEL_LID_LED_ID)
@@ -159,7 +158,6 @@ class LedBlinkerService : Service() {
             }
             notificationManager.createNotificationChannel(fgChannel)
 
-            // Kênh chuyên biệt điều khiển đèn LED nắp máy
             val pulseChannel = NotificationChannel(
                 CHANNEL_LID_LED_ID,
                 "Mive Lid LED Channel",
