@@ -7,7 +7,6 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.hardware.camera2.CameraManager
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -15,14 +14,11 @@ import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import java.io.File
-import java.io.FileOutputStream
-import java.util.Calendar
 
 /**
- * LedBlinkerService - Multi-Mode Persistent LED pulse engine for Mive Style Folder 1.
- * Fixes the 1-blink limit by alternating notification IDs, cancelling before re-notifying,
- * and pulsing both Notification Lights and exterior hardware LED.
+ * LedBlinkerService - Chuyên biệt cho đèn LED nắp gập của Mive Style Folder 1 (AT-M120).
+ * Đã loại bỏ hoàn toàn đèn Flash camera.
+ * Sử dụng cơ chế đảo ID thông báo (3001 <-> 3002) mỗi 2.5s để kích hoạt chip MediaTek chớp đèn nắp.
  */
 class LedBlinkerService : Service() {
 
@@ -32,17 +28,8 @@ class LedBlinkerService : Service() {
         const val ACTION_STOP_BLINKING = "com.mive.ledpulse.ACTION_STOP_BLINKING"
         const val ACTION_TEST_BLINK = "com.mive.ledpulse.ACTION_TEST_BLINK"
 
-        private const val CHANNEL_FOREGROUND_ID = "mive_led_service_channel_v3"
-        private const val CHANNEL_PULSE_ID = "mive_led_pulse_channel_v3"
-        private const val NOTIFICATION_FOREGROUND_ID = 1001
-
-        fun triggerTestBlink(context: Context, durationMs: Long) {
-            val intent = Intent(context, LedBlinkerService::class.java).apply {
-                action = ACTION_TEST_BLINK
-                putExtra("TEST_DURATION", durationMs)
-            }
-            context.startService(intent)
-        }
+        private const val CHANNEL_FOREGROUND_ID = "mive_bg_service_v5"
+        private const val CHANNEL_LID_LED_ID = "mive_lid_led_channel_v5"
     }
 
     private val TAG = "LedBlinkerService"
@@ -50,24 +37,17 @@ class LedBlinkerService : Service() {
     private var isBlinking = false
     private var wakeLock: PowerManager.WakeLock? = null
     private lateinit var notificationManager: NotificationManager
-    private var cameraManager: CameraManager? = null
-
-    // Alternating ID toggle to force Android Lights HAL to re-blink on every cycle
     private var pulseToggle = false
-
-    private val PULSE_INTERVAL_MS = 2000L // 2 giây nháy 1 lần
-    private val PULSE_DURATION_MS = 300   // Mỗi lần sáng 300ms
-    private val LED_COLOR_INT = 0xFF00FF00.toInt() // Xanh lá
 
     private val pulseRunnable = object : Runnable {
         override fun run() {
             if (!isBlinking) return
 
-            // Thực hiện chớp đèn LED
-            performLedPulse()
+            // Kích hoạt đèn LED trên nắp máy
+            triggerLidLedPulse()
 
-            // Lên lịch nháy tiếp theo
-            handler.postDelayed(this, PULSE_INTERVAL_MS)
+            // Lặp lại mỗi 2.5 giây
+            handler.postDelayed(this, 2500L)
         }
     }
 
@@ -79,45 +59,38 @@ class LedBlinkerService : Service() {
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "MiveLedPulse::WakeLock")
 
-        try {
-            cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
-        } catch (e: Exception) {
-            Log.e(TAG, "CameraManager init: ${e.message}")
-        }
-
-        startForeground(NOTIFICATION_FOREGROUND_ID, createForegroundNotification("Mive LED Service Active"))
+        startForeground(1001, createForegroundNotification("Mive LED Pulse Active"))
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START_BLINKING -> {
-                val count = intent.getIntExtra("COUNT", 1)
-                startBlinking(count)
+                startBlinking()
             }
             ACTION_STOP_BLINKING -> {
                 stopBlinking()
             }
             ACTION_TEST_BLINK -> {
-                val duration = intent.getLongExtra("TEST_DURATION", 10000L)
-                startBlinking(1)
+                val duration = intent.getLongExtra("TEST_DURATION", 30000L)
+                startBlinking()
                 handler.postDelayed({
                     stopBlinking()
                 }, duration)
             }
             ACTION_START_MONITORING -> {
-                Log.d(TAG, "Monitoring initiated.")
+                Log.d(TAG, "Monitoring active.")
             }
         }
         return START_STICKY
     }
 
-    private fun startBlinking(count: Int) {
+    private fun startBlinking() {
         if (isBlinking) return
         isBlinking = true
-        Log.d(TAG, "Starting persistent LED pulse loop.")
+        Log.d(TAG, "Bắt đầu chu kỳ nháy đèn LED nắp gập.")
 
         try {
-            wakeLock?.acquire(2 * 60 * 60 * 1000L) // Giữ CPU chạy nền không bị ngắt
+            wakeLock?.acquire(2 * 60 * 60 * 1000L) // Giữ CPU tỉnh để điều khiển đèn
         } catch (e: Exception) {
             Log.e(TAG, "WakeLock error: ${e.message}")
         }
@@ -127,15 +100,12 @@ class LedBlinkerService : Service() {
     }
 
     private fun stopBlinking() {
-        if (!isBlinking) return
         isBlinking = false
-        Log.d(TAG, "Halting LED pulse loop.")
+        Log.d(TAG, "Dừng nháy đèn LED nắp.")
 
         handler.removeCallbacks(pulseRunnable)
-        notificationManager.cancel(1002)
-        notificationManager.cancel(1003)
-
-        turnOffAllTorches()
+        notificationManager.cancel(3001)
+        notificationManager.cancel(3002)
 
         if (wakeLock?.isHeld == true) {
             try {
@@ -145,105 +115,36 @@ class LedBlinkerService : Service() {
     }
 
     /**
-     * Kỹ thuật ép phần cứng Mive nháy liên tục:
-     * 1) Luân phiên đổi ID thông báo (1002 <-> 1003) và huỷ ID cũ
-     * 2) Tắt cờ setOnlyAlertOnce để ép HAL chớp đèn
-     * 3) Kích hoạt đồng thời qua CameraManager cho đèn ngoài nắp gập
+     * Kỹ thuật đảo ID thông báo (3001 <-> 3002) mỗi 2.5s.
+     * Huỷ ID cũ và bắn ID mới kèm cờ FLAG_SHOW_LIGHTS để chip MediaTek nhận diện là
+     * thông báo mới và kích hoạt chiếc đèn LED trên vỏ nắp máy Mive chớp sáng!
      */
-    private fun performLedPulse() {
+    private fun triggerLidLedPulse() {
         try {
-            val pulseId = if (pulseToggle) 1002 else 1003
-            val oldId = if (pulseToggle) 1003 else 1002
+            val pulseId = if (pulseToggle) 3001 else 3002
+            val oldId = if (pulseToggle) 3002 else 3001
             pulseToggle = !pulseToggle
 
-            // Bước 1: Huỷ ID cũ để hệ điều hành reset trạng thái đèn
+            // Huỷ thông báo cũ để reset trạng thái đèn
             notificationManager.cancel(oldId)
 
-            // Bước 2: Bắn thông báo mới có cờ FLAG_SHOW_LIGHTS
-            val pulseNotification = NotificationCompat.Builder(this, CHANNEL_PULSE_ID)
+            val pulseNotif = NotificationCompat.Builder(this, CHANNEL_LID_LED_ID)
                 .setSmallIcon(R.drawable.ic_led_pulse)
-                .setContentTitle("Mive Notification Active")
-                .setContentText("LED pulsing...")
-                .setPriority(NotificationCompat.PRIORITY_MAX)
-                .setCategory(NotificationCompat.CATEGORY_STATUS)
+                .setContentTitle("Thông báo mới")
+                .setContentText("Nháy đèn LED nắp")
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setCategory(NotificationCompat.CATEGORY_MESSAGE)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                .setLights(LED_COLOR_INT, PULSE_DURATION_MS, 200)
-                .setOnlyAlertOnce(false) // QUAN TRỌNG: false để đèn chớp lặp lại!
+                .setLights(0xFF00FF00.toInt(), 500, 500)
                 .setAutoCancel(true)
                 .build()
 
-            pulseNotification.flags = pulseNotification.flags or Notification.FLAG_SHOW_LIGHTS
+            pulseNotif.flags = pulseNotif.flags or Notification.FLAG_SHOW_LIGHTS
 
-            notificationManager.notify(pulseId, pulseNotification)
-
-            // Bước 3: Huỷ sau khi sáng xong để vòng lặp sau nhận là sự kiện mới
-            handler.postDelayed({
-                try {
-                    notificationManager.cancel(pulseId)
-                } catch (e: Exception) {}
-            }, PULSE_DURATION_MS.toLong())
-
-            // Bước 4: Chớp đồng thời bóng LED ở nắp ngoài qua CameraManager
-            pulseCameraTorch()
-
-            // Bước 5: Thử kích hoạt trực tiếp vào sysfs MediaTek
-            pulseSysfsLeds()
+            notificationManager.notify(pulseId, pulseNotif)
 
         } catch (e: Exception) {
-            Log.e(TAG, "performLedPulse error: ${e.message}")
-        }
-    }
-
-    private fun pulseCameraTorch() {
-        try {
-            cameraManager?.let { cm ->
-                for (id in cm.cameraIdList) {
-                    try {
-                        cm.setTorchMode(id, true)
-                        handler.postDelayed({
-                            try {
-                                cm.setTorchMode(id, false)
-                            } catch (e: Exception) {}
-                        }, PULSE_DURATION_MS.toLong())
-                    } catch (e: Exception) {}
-                }
-            }
-        } catch (e: Exception) {}
-    }
-
-    private fun turnOffAllTorches() {
-        try {
-            cameraManager?.let { cm ->
-                for (id in cm.cameraIdList) {
-                    try {
-                        cm.setTorchMode(id, false)
-                    } catch (e: Exception) {}
-                }
-            }
-        } catch (e: Exception) {}
-    }
-
-    private fun pulseSysfsLeds() {
-        val ledPaths = arrayOf(
-            "/sys/class/leds/red/brightness",
-            "/sys/class/leds/green/brightness",
-            "/sys/class/leds/blue/brightness",
-            "/sys/class/leds/led_notification/brightness",
-            "/sys/class/leds/charging/brightness",
-            "/sys/class/leds/flash/brightness"
-        )
-        for (path in ledPaths) {
-            val file = File(path)
-            if (file.exists() && file.canWrite()) {
-                try {
-                    FileOutputStream(file).use { it.write("255".toByteArray()) }
-                    handler.postDelayed({
-                        try {
-                            FileOutputStream(file).use { it.write("0".toByteArray()) }
-                        } catch (e: Exception) {}
-                    }, PULSE_DURATION_MS.toLong())
-                } catch (e: Exception) {}
-            }
+            Log.e(TAG, "Error pulsing lid LED: ${e.message}")
         }
     }
 
@@ -251,25 +152,21 @@ class LedBlinkerService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val fgChannel = NotificationChannel(
                 CHANNEL_FOREGROUND_ID,
-                "Mive LED Pulse Background Service",
+                "Mive LED Pulse Background",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Keeps the LED blinker active when clamshell is closed."
-                enableLights(false)
-                enableVibration(false)
                 setShowBadge(false)
             }
             notificationManager.createNotificationChannel(fgChannel)
 
-            // Kênh thông báo đèn LED mới với quyền ưu tiên cao nhất
+            // Kênh chuyên biệt điều khiển đèn LED nắp máy
             val pulseChannel = NotificationChannel(
-                CHANNEL_PULSE_ID,
-                "Mive Exterior LED Pulse Channel",
-                NotificationManager.IMPORTANCE_MAX
+                CHANNEL_LID_LED_ID,
+                "Mive Lid LED Channel",
+                NotificationManager.IMPORTANCE_HIGH
             ).apply {
-                description = "Forces repeating hardware pulses to Mive Style Folder exterior LED."
                 enableLights(true)
-                lightColor = LED_COLOR_INT
+                lightColor = 0xFF00FF00.toInt()
                 enableVibration(false)
                 vibrationPattern = longArrayOf(0)
                 setSound(null, null)
@@ -287,7 +184,7 @@ class LedBlinkerService : Service() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_FOREGROUND_ID)
-            .setContentTitle("Mive LED Pulse Active")
+            .setContentTitle("Mive LED Pulse")
             .setContentText(statusText)
             .setSmallIcon(R.drawable.ic_led_pulse)
             .setContentIntent(pendingIntent)
