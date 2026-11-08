@@ -15,10 +15,6 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
 
-/**
- * MainActivity for Mive Style Folder 1 (AT-M120 / Android 12 Go)
- * Designed with large tactile touch & keypad D-pad navigation support.
- */
 class MainActivity : AppCompatActivity() {
 
     private lateinit var tvStatus: TextView
@@ -58,7 +54,7 @@ class MainActivity : AppCompatActivity() {
             prefs.isServiceEnabled = isChecked
             if (isChecked) {
                 if (!isNotificationServiceEnabled()) {
-                    Toast.makeText(this, "Please grant Notification Access first!", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, "Vui lòng cấp quyền truy cập thông báo!", Toast.LENGTH_LONG).show()
                     openNotificationAccessSettings()
                 } else {
                     startBlinkerService()
@@ -79,11 +75,15 @@ class MainActivity : AppCompatActivity() {
 
         btnTestBlink.setOnClickListener {
             if (!isNotificationServiceEnabled()) {
-                Toast.makeText(this, "Enable Notification Access first!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Hãy cấp quyền thông báo trước!", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-            Toast.makeText(this, "Triggering 10s test blink! Close phone lid to observe LED.", Toast.LENGTH_LONG).show()
-            LedBlinkerService.triggerTestBlink(this, 10000)
+            Toast.makeText(this, "Gập nắp máy lại ngay! Đèn nắp sẽ nháy trong 30s.", Toast.LENGTH_LONG).show()
+
+            // Chờ 3 giây để bạn kịp gập nắp máy lại
+            btnTestBlink.postDelayed({
+                LedBlinkerService.triggerTestBlink(this@MainActivity, 30000L)
+            }, 3000L)
         }
     }
 
@@ -91,15 +91,15 @@ class MainActivity : AppCompatActivity() {
         val hasNotifAccess = isNotificationServiceEnabled()
         val isBatteryExempt = isIgnoringBatteryOptimizations()
 
-        tvNotificationAccess.text = if (hasNotifAccess) "✓ Granted (OK)" else "✗ Missing Access"
+        tvNotificationAccess.text = if (hasNotifAccess) "✓ Đã cấp quyền (OK)" else "✗ Chưa cấp quyền"
         tvNotificationAccess.setTextColor(if (hasNotifAccess) 0xFF4CAF50.toInt() else 0xFFF44336.toInt())
         btnGrantNotification.isEnabled = !hasNotifAccess
 
-        tvBatteryStatus.text = if (isBatteryExempt) "✓ Unrestricted (OK)" else "⚠ Optimized (May stop asleep)"
+        tvBatteryStatus.text = if (isBatteryExempt) "✓ Không hạn chế (OK)" else "⚠ Có thể bị ngắt khi ngủ"
         tvBatteryStatus.setTextColor(if (isBatteryExempt) 0xFF4CAF50.toInt() else 0xFFFF9800.toInt())
 
         val prefs = PreferencesManager(this)
-        tvStatus.text = if (prefs.isServiceEnabled && hasNotifAccess) "RUNNING (Watching for notifications)" else "STOPPED"
+        tvStatus.text = if (prefs.isServiceEnabled && hasNotifAccess) "ĐANG CHẠY (Sẵn sàng nháy đèn)" else "ĐANG TẮT"
         tvStatus.setTextColor(if (prefs.isServiceEnabled && hasNotifAccess) 0xFF4CAF50.toInt() else 0xFF757575.toInt())
     }
 
@@ -122,7 +122,7 @@ class MainActivity : AppCompatActivity() {
         try {
             startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
         } catch (e: Exception) {
-            Toast.makeText(this, "Could not open settings automatically", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Không thể mở cài đặt", Toast.LENGTH_SHORT).show()
         }
     }
 
